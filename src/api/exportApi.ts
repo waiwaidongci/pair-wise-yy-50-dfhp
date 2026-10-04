@@ -1,32 +1,60 @@
-import axios, { type AxiosAdapter } from 'axios'
-import type { ExportTask } from '../stores/imposition'
+import axios, { type AxiosAdapter, type AxiosResponse } from 'axios'
+import type { ExportTaskDetail } from '../production/handoff'
 
-let tasks: ExportTask[] = [
-  { id: 'EXP-0925-01', name: '印刷交付包 · PDF/X-4', progress: 72, status: '已中断', updatedAt: '09-25 16:42', resumable: true },
-  { id: 'EXP-0925-02', name: '数字样张低分辨率预览', progress: 100, status: '已完成', updatedAt: '09-25 15:18', resumable: false },
-]
+interface BackendHandlers {
+  list: () => ExportTaskDetail[]
+  create: (payload?: { name?: string; kind?: string }) => ExportTaskDetail
+  resume: (id: string) => ExportTaskDetail | null
+  fail: (id: string) => ExportTaskDetail | null
+}
+
+let handlers: BackendHandlers | null = null
+
+/** 由应用层把 Pinia store 的分片调度逻辑绑定为模拟后端 */
+export function bindExportBackend(bound: BackendHandlers) {
+  handlers = bound
+}
+
+function respond<T>(data: T, config: any, status = 200): AxiosResponse<T> {
+  return { data, status, statusText: status === 409 ? 'Conflict' : 'OK', headers: {}, config }
+}
+
+async function delay() {
+  await new Promise((resolve) => setTimeout(resolve, 180))
+}
 
 const adapter: AxiosAdapter = async (config) => {
-  await new Promise((resolve) => setTimeout(resolve, 160))
-  if (config.url === '/api/print/export-tasks' && config.method === 'get') {
-    return { data: structuredClone(tasks), status: 200, statusText: 'OK', headers: {}, config }
+  await delay()
+  if (!handlers) return respond(null, config, 503)
+  const url = config.url ?? ''
+
+  if (url === '/api/print/export-tasks' && config.method === 'get') {
+    return respond(handlers.list(), config)
   }
-  if (config.url?.match(/^\/api\/print\/export-tasks\/[^/]+\/resume$/) && config.method === 'post') {
-    const id = config.url.split('/').at(-2)
-    const task = tasks.find((item) => item.id === id)
-    if (task && task.resumable) {
-      task.status = '生成中'
-      task.progress = Math.max(task.progress, 12)
-      task.updatedAt = '刚刚'
-    }
-    return { data: structuredClone(task), status: 200, statusText: 'OK', headers: {}, config }
+  if (url === '/api/print/export-tasks' && config.method === 'post') {
+    const payload = (config.data ? JSON.parse(config.data) : {}) as { name?: string; kind?: string }
+    return respond(handlers.create(payload), config)
   }
-  return { data: null, status: 404, statusText: 'Not Found', headers: {}, config }
+  const resumeMatch = url.match(/^\/api\/print\/export-tasks\/([^/]+)\/resume$/)
+  if (resumeMatch && config.method === 'post') {
+    const detail = handlers.resume(resumeMatch[1])
+    return detail ? respond(detail, config) : respond(null, config, 404)
+  }
+  const failMatch = url.match(/^\/api\/print\/export-tasks\/([^/]+)\/fail-simulation$/)
+  if (failMatch && config.method === 'post') {
+    const detail = handlers.fail(failMatch[1])
+    return detail ? respond(detail, config) : respond(null, config, 404)
+  }
+  return respond(null, config, 404)
 }
 
 const client = axios.create({ adapter })
 
 export const exportApi = {
-  list: () => client.get<ExportTask[]>('/api/print/export-tasks'),
-  resume: (id: string) => client.post<ExportTask>(`/api/print/export-tasks/${id}/resume`),
+  list: () => client.get<ExportTaskDetail[]>('/api/print/export-tasks'),
+  create: (payload: { name?: string; kind?: string }) =>
+    client.post<ExportTaskDetail>('/api/print/export-tasks', payload),
+  resume: (id: string) => client.post<ExportTaskDetail>(`/api/print/export-tasks/${id}/resume`),
+  simulateFailure: (id: string) =>
+    client.post<ExportTaskDetail>(`/api/print/export-tasks/${id}/fail-simulation`),
 }

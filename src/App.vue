@@ -20,15 +20,16 @@ const nav = [
 
 <template>
   <div class="shell">
-    <header class="mobile-bar"><Button icon="pi pi-bars" text severity="contrast" @click="mobileOpen = !mobileOpen" /><strong>{{ title }}</strong><Tag :value="store.locked ? '已锁定' : '编辑中'" :severity="store.locked ? 'success' : 'warn'" /></header>
+    <header class="mobile-bar"><Button icon="pi pi-bars" text severity="contrast" @click="mobileOpen = !mobileOpen" /><strong>{{ title }}</strong><Tag :value="store.locked ? `${store.revision} 已锁定` : '候选修订中'" :severity="store.locked ? 'success' : 'warn'" /></header>
     <aside :class="{ open: mobileOpen }">
       <div class="brand"><div class="brand-mark">拼版</div><div><strong>印刷生产中心</strong><small>《潮汐来信》节目册</small></div></div>
       <nav>
         <RouterLink v-for="item in nav" :key="item.to" :to="item.to" @click="mobileOpen = false"><i :class="item.icon" />{{ item.label }}</RouterLink>
       </nav>
       <div class="sidebar-status">
-        <div><span :class="{ warn: !store.locked }" />{{ store.locked ? '基线已审批锁定' : `${store.validations.length} 项预检提示` }}</div>
-        <small>版本 {{ store.revision }} · 自动保存草稿</small>
+        <div><span :class="{ warn: !store.locked }" />{{ store.locked ? `基线 ${store.revision} 已审批锁定` : '候选版本修订中' }}</div>
+        <small>{{ store.clientLabel }} · 草稿自动保存</small>
+        <small v-if="store.conflicts.length" class="conflict"><i class="pi pi-bolt" />{{ store.conflicts.length }} 条冲突留档待处理</small>
       </div>
     </aside>
     <main><RouterView /></main>
@@ -51,6 +52,7 @@ nav a.router-link-active { color: white; background: #3a555d; box-shadow: inset 
 .sidebar-status span { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: #58b38a; }
 .sidebar-status span.warn { background: #d9a04d; }
 .sidebar-status small { display: block; margin-top: 6px; color: #96a9ae; font-size: 9px; }
+.sidebar-status small.conflict { color: #e8b06a; }
 main { min-width: 0; margin-left: 244px; }
 .mobile-bar { display: none; }
 @media (max-width: 820px) {

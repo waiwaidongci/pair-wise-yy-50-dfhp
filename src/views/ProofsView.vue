@@ -6,6 +6,7 @@ import InputNumber from 'primevue/inputnumber'
 import Textarea from 'primevue/textarea'
 import Select from 'primevue/select'
 import Tag from 'primevue/tag'
+import Message from 'primevue/message'
 import { useImpositionStore, type Proof } from '../stores/imposition'
 
 const store = useImpositionStore()
@@ -13,9 +14,29 @@ const active = computed(() => store.proofs.find((proof) => proof.id === store.se
 const draft = ref<Proof>({ ...active.value })
 watch(active, (value) => (draft.value = { ...value }), { immediate: true })
 const sampleFile = ref('当前使用数字样张 v2_09025.tif')
+const handoffMessage = ref<string | null>(null)
 
 function save() {
   store.updateProof(draft.value.id, draft.value)
+}
+
+/** 打样决定直接生产交接：本轮“通过”即解锁新拼版版本，并对旧导出任务对账 */
+function approveAndUnlock() {
+  draft.value.decision = '通过'
+  save()
+  const outcome = store.lockBaseline({ unlockProofId: draft.value.id })
+  if ('queued' in outcome) return
+  if (!outcome.ok) {
+    handoffMessage.value = `基线刚被其他标签页确认，本次决定对应内容已留档为冲突 ${outcome.conflict?.id}。`
+    return
+  }
+  const reused = outcome.reconciliation.reduce((sum, item) => sum + item.reused, 0)
+  const invalidated = outcome.reconciliation.reduce((sum, item) => sum + item.invalidated, 0)
+  handoffMessage.value = `第 ${draft.value.round} 轮打样决定已解锁 ${outcome.version?.id}；旧导出分片复用 ${reused} 组、作废 ${invalidated} 组。`
+}
+
+function unlockedVersion(proofId: string) {
+  return store.versions.find((version) => version.unlockProofId === proofId)
 }
 </script>
 
@@ -26,12 +47,16 @@ function save() {
       <Button label="新建打样轮次" icon="pi pi-plus" @click="store.createProof" />
     </div>
 
+    <Message v-if="handoffMessage" severity="success" :closable="false" class="handoff-banner" @close="handoffMessage = null">
+      <template #icon><i class="pi pi-send" /></template>{{ handoffMessage }}
+    </Message>
+
     <div class="proof-layout">
       <section class="panel">
         <div class="panel-head"><h3>打样轮次</h3><Tag :value="`${store.proofs.length} 轮`" /></div>
         <div class="proof-list">
-          <button v-for="proof in store.proofs.slice().reverse()" :key="proof.id" :class="{ active: proof.id === store.selectedProof }" @click="store.selectedProof = proof.id">
-            <div><strong>第 {{ proof.round }} 轮 · {{ proof.sample }}</strong><small>{{ proof.date }} · {{ proof.owner }}</small></div>
+          <button v-for="proof in store.proofs.slice().reverse()" :key="proof.id" :class="{ active: proof.id === store.selectedProof }" @click="store.selectedProof = proof.id; handoffMessage = null">
+            <div><strong>第 {{ proof.round }} 轮 · {{ proof.sample }}</strong><small>{{ proof.date }} · {{ proof.owner }}<template v-if="unlockedVersion(proof.id)"> · 已解锁 {{ unlockedVersion(proof.id)!.id }}</template></small></div>
             <span>ΔE {{ proof.deltaE }}</span>
             <Tag :value="proof.decision" :severity="proof.decision === '通过' ? 'success' : proof.decision === '退回' ? 'danger' : 'warn'" />
           </button>
@@ -45,7 +70,7 @@ function save() {
             <div class="print-sample"><span>P1 / P8</span><strong>潮汐来信</strong><i>数字样张色靶</i></div>
             <div>
               <strong>{{ sampleFile }}</strong>
-              <p>样张文件已关联当前拼版版本 {{ store.revision }}，包含 P1、P3、P7、P8 重点页面。</p>
+              <p>样张文件已关联当前生产基线 {{ store.revision }}（内容哈希 {{ store.baseline ? store.baseline.contentHash.slice(0, 10) : '—' }}），包含 P1、P3、P7、P8 重点页面。</p>
               <label class="file-button"><i class="pi pi-upload" /> 替换样张照片<input type="file" accept="image/*,.pdf,.tif" style="display:none" @change="sampleFile = ($event.target as HTMLInputElement).files?.[0]?.name ?? sampleFile" /></label>
             </div>
           </div>
@@ -60,6 +85,9 @@ function save() {
           <div class="decision-row">
             <Select v-model="draft.decision" :options="['待决定','通过','退回']" />
             <Button label="保存打样记录" icon="pi pi-save" @click="save" />
+            <Button label="通过并解锁新版本" icon="pi pi-lock" severity="success"
+                    :disabled="unlockedVersion(draft.id)?.status === '已锁定'"
+                    @click="approveAndUnlock" />
             <Button label="退回修改" icon="pi pi-undo" severity="danger" outlined @click="draft.decision = '退回'; save()" />
           </div>
         </div>
@@ -77,6 +105,7 @@ function save() {
 </template>
 
 <style scoped>
+.handoff-banner { margin: 0 0 14px; }
 .proof-layout { display: grid; grid-template-columns: 350px minmax(0,1fr) 300px; gap: 14px; align-items: start; }
 .proof-list { padding: 8px; }
 .proof-list button { display: grid; width: 100%; grid-template-columns: 1fr 58px auto; gap: 8px; align-items: center; padding: 11px; border: 0; border-radius: 7px; text-align: left; background: transparent; cursor: pointer; }
