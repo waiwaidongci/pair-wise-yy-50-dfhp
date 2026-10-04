@@ -7,12 +7,17 @@ import Textarea from 'primevue/textarea'
 import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import { useImpositionStore, type Proof } from '../stores/imposition'
+import { ledger } from '../handoff'
 
 const store = useImpositionStore()
 const active = computed(() => store.proofs.find((proof) => proof.id === store.selectedProof) ?? store.proofs[0])
 const draft = ref<Proof>({ ...active.value })
 watch(active, (value) => (draft.value = { ...value }), { immediate: true })
 const sampleFile = ref('当前使用数字样张 v2_09025.tif')
+
+function unlockedBy(proofId: string) {
+  return ledger.confirmed.find((record) => record.unlockedBy.proofId === proofId)
+}
 
 function save() {
   store.updateProof(draft.value.id, draft.value)
@@ -33,13 +38,25 @@ function save() {
           <button v-for="proof in store.proofs.slice().reverse()" :key="proof.id" :class="{ active: proof.id === store.selectedProof }" @click="store.selectedProof = proof.id">
             <div><strong>第 {{ proof.round }} 轮 · {{ proof.sample }}</strong><small>{{ proof.date }} · {{ proof.owner }}</small></div>
             <span>ΔE {{ proof.deltaE }}</span>
-            <Tag :value="proof.decision" :severity="proof.decision === '通过' ? 'success' : proof.decision === '退回' ? 'danger' : 'warn'" />
+            <div class="proof-tags">
+              <Tag :value="proof.decision" :severity="proof.decision === '通过' ? 'success' : proof.decision === '退回' ? 'danger' : 'warn'" />
+              <Tag v-if="unlockedBy(proof.id)" :value="`已解锁 ${unlockedBy(proof.id)!.revision}`" severity="info" />
+            </div>
           </button>
         </div>
       </section>
 
       <section class="panel proof-editor">
-        <div class="panel-head"><h3>{{ draft.id }} · 第 {{ draft.round }} 轮打样记录</h3><Tag :value="draft.decision" :severity="draft.decision === '通过' ? 'success' : draft.decision === '退回' ? 'danger' : 'warn'" /></div>
+        <div class="panel-head">
+          <h3>{{ draft.id }} · 第 {{ draft.round }} 轮打样记录</h3>
+          <Tag :value="draft.decision" :severity="draft.decision === '通过' ? 'success' : draft.decision === '退回' ? 'danger' : 'warn'" />
+        </div>
+        <div v-if="unlockedBy(draft.id)" class="unlocked-banner">
+          <i class="pi pi-lock" /> 本轮打样已解锁拼版基线 <strong>{{ unlockedBy(draft.id)!.revision }}</strong>（{{ unlockedBy(draft.id)!.lockedAt }}）。
+        </div>
+        <div v-else-if="draft.decision === '通过'" class="unlock-hint">
+          <i class="pi pi-info-circle" /> 本轮通过后，请前往「版本对比」接受变更并锁定基线：先确认的基线生效，导出任务将按新版本重算分片。
+        </div>
         <div v-if="active" class="proof-body">
           <div class="sample-preview">
             <div class="print-sample"><span>P1 / P8</span><strong>潮汐来信</strong><i>数字样张色靶</i></div>
@@ -79,12 +96,15 @@ function save() {
 <style scoped>
 .proof-layout { display: grid; grid-template-columns: 350px minmax(0,1fr) 300px; gap: 14px; align-items: start; }
 .proof-list { padding: 8px; }
-.proof-list button { display: grid; width: 100%; grid-template-columns: 1fr 58px auto; gap: 8px; align-items: center; padding: 11px; border: 0; border-radius: 7px; text-align: left; background: transparent; cursor: pointer; }
-.proof-list button.active { background: #edf5f4; box-shadow: inset 3px 0 #337b79; }
+.proof-list button { display: grid; width: 100%; grid-template-columns: 1fr 58px auto; gap: 8px; align-items: center; padding: 11px; border: 0; border-radius: 7px; text-align: left; background: transparent; cursor: pointer; }.proof-list button.active { background: #edf5f4; box-shadow: inset 3px 0 #337b79; }
 .proof-list strong, .proof-list small { display: block; }
 .proof-list strong { font-size: 12px; }
 .proof-list small { margin-top: 4px; color: #7a878e; font-size: 10px; }
 .proof-list > button > span { color: #506f75; font-family: monospace; font-weight: 700; }
+.proof-tags { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.unlocked-banner, .unlock-hint { display: flex; align-items: center; gap: 7px; margin: 12px 18px 0; padding: 9px 12px; border-radius: 6px; font-size: 11px; line-height: 1.5; }
+.unlocked-banner { color: #2d6a52; background: #e9f5ef; }
+.unlock-hint { color: #716555; background: #fff5e8; }
 .proof-body { display: grid; gap: 15px; padding: 18px; }
 .sample-preview { display: grid; grid-template-columns: 190px 1fr; gap: 16px; align-items: center; padding: 14px; background: #f4f6f5; }
 .print-sample { position: relative; display: grid; width: 150px; aspect-ratio: .72; place-items: center; padding: 12px; color: #dce9e8; background: linear-gradient(145deg,#173a4a,#306a6d); box-shadow: 0 8px 18px rgba(29,54,62,.18); }

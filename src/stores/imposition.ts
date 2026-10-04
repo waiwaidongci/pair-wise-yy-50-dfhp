@@ -1,67 +1,39 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
+import {
+  boot,
+  exportTasks,
+  ledger,
+  submitBaseline,
+  recomputeAllTasks,
+  createTask,
+  scopeHashes,
+  hashJson,
+  sheetSpec,
+  TAB_ID,
+  type Page,
+  type Position,
+  type Proof,
+  type ExportTask,
+  type ConflictRecord,
+} from '../handoff'
+import { exportApi } from '../api/exportApi'
 
-export type Page = { pageNo: number; name: string; width: number; height: number; bleed: number; content: string }
-export type Position = { id: string; pageNo: number; x: number; y: number; rotation: number; front: boolean }
+export type { Page, Position, Proof, ExportTask, Shard, ShardStatus, VersionRecord, ConflictRecord, MigrationRecord, HandoffRecord } from '../handoff'
 export type Validation = { id: string; severity: '错误' | '警告'; pageNo?: number; title: string; detail: string }
-export type Proof = { id: string; round: number; date: string; sample: string; deltaE: number; feedback: string; correction: string; owner: string; decision: '待决定' | '通过' | '退回' }
-export type ExportTask = { id: string; name: string; progress: number; status: '排队中' | '生成中' | '已完成' | '已中断'; updatedAt: string; resumable: boolean }
-
-export const sheetSpec = {
-  width: 720,
-  height: 1020,
-  bleed: 3,
-  safe: 5,
-  gutter: 6,
-  binding: '骑马订',
-  grain: '纵向',
-}
-
-const seedPages: Page[] = [
-  { pageNo: 1, name: '封面', width: 210, height: 297, bleed: 3, content: '潮汐来信 / 节目册' },
-  { pageNo: 2, name: '版权页', width: 210, height: 297, bleed: 2, content: '版权与演职人员' },
-  { pageNo: 3, name: '序言', width: 210, height: 297, bleed: 3, content: '导演手记' },
-  { pageNo: 4, name: '剧照跨页左', width: 210, height: 297, bleed: 3, content: '第一幕剧照' },
-  { pageNo: 5, name: '剧照跨页右', width: 210, height: 297, bleed: 3, content: '第一幕剧照延伸' },
-  { pageNo: 6, name: '曲目表', width: 210, height: 297, bleed: 3, content: '曲目与时长' },
-  { pageNo: 7, name: '创作团队', width: 210, height: 297, bleed: 1, content: '主创与制作团队' },
-  { pageNo: 8, name: '封底', width: 210, height: 297, bleed: 3, content: '巡演信息' },
-]
-
-const seedPositions: Position[] = [
-  { id: 'P-01', pageNo: 8, x: 34, y: 44, rotation: 0, front: true },
-  { id: 'P-02', pageNo: 1, x: 372, y: 44, rotation: 180, front: true },
-  { id: 'P-03', pageNo: 6, x: 34, y: 548, rotation: 180, front: true },
-  { id: 'P-04', pageNo: 3, x: 372, y: 548, rotation: 0, front: true },
-  { id: 'P-05', pageNo: 2, x: 34, y: 44, rotation: 0, front: false },
-  { id: 'P-06', pageNo: 7, x: 372, y: 44, rotation: 180, front: false },
-  { id: 'P-07', pageNo: 4, x: 34, y: 548, rotation: 0, front: false },
-  { id: 'P-08', pageNo: 5, x: 372, y: 548, rotation: 180, front: false },
-]
-
-const seedProofs: Proof[] = [
-  { id: 'PRF-01', round: 1, date: '2026-09-18', sample: '数字样张 v1', deltaE: 3.8, feedback: '封面夜空蓝偏紫，剧照暗部层次压缩。', correction: '调整 CMYK 曲线，黑色通道减少 4%。', owner: '周默 / 色彩管理', decision: '退回' },
-  { id: 'PRF-02', round: 2, date: '2026-09-25', sample: '数字样张 v2', deltaE: 1.9, feedback: '整体色差改善，P7 出血仍不足。', correction: '重排 P7 版位并增加 2mm 出血。', owner: '林青 / 拼版', decision: '待决定' },
-]
-
-const seedTasks: ExportTask[] = [
-  { id: 'EXP-0925-01', name: '印刷交付包 · PDF/X-4', progress: 72, status: '已中断', updatedAt: '09-25 16:42', resumable: true },
-  { id: 'EXP-0925-02', name: '数字样张低分辨率预览', progress: 100, status: '已完成', updatedAt: '09-25 15:18', resumable: false },
-]
 
 export const useImpositionStore = defineStore('imposition', () => {
-  const saved = localStorage.getItem('print-imposition-v1')
-  const restored = saved ? JSON.parse(saved) : null
-  const pages = ref<Page[]>(restored?.pages ?? structuredClone(seedPages))
-  const positions = ref<Position[]>(restored?.positions ?? structuredClone(seedPositions))
-  const proofs = ref<Proof[]>(restored?.proofs ?? structuredClone(seedProofs))
-  const tasks = ref<ExportTask[]>(restored?.tasks ?? structuredClone(seedTasks))
+  const pages = ref<Page[]>(boot.pages)
+  const positions = ref<Position[]>(boot.positions)
+  const proofs = ref<Proof[]>(boot.proofs)
+  const tasks = ref<ExportTask[]>(exportTasks.value)
   const side = ref<'front' | 'back'>('front')
   const zoom = ref(72)
-  const revision = ref(restored?.revision ?? 'R6')
-  const locked = ref(restored?.locked ?? false)
+  const revision = ref(boot.revision)
+  const locked = ref(false)
   const selectedPosition = ref<string | null>(null)
   const selectedProof = ref('PRF-02')
+  const lastConflict = ref<ConflictRecord | null>(null)
 
   const validations = computed<Validation[]>(() => {
     const issues: Validation[] = []
@@ -85,7 +57,7 @@ export const useImpositionStore = defineStore('imposition', () => {
   })
 
   watch([pages, positions, proofs, tasks, revision, locked], () => {
-    localStorage.setItem('print-imposition-v1', JSON.stringify({ pages: pages.value, positions: positions.value, proofs: proofs.value, tasks: tasks.value, revision: revision.value, locked: locked.value }))
+    localStorage.setItem('print-imposition-v2', JSON.stringify({ pages: pages.value, positions: positions.value, proofs: proofs.value, tasks: tasks.value, revision: revision.value, locked: locked.value }))
   }, { deep: true })
 
   function updatePosition(id: string, patch: Partial<Position>) {
@@ -108,23 +80,64 @@ export const useImpositionStore = defineStore('imposition', () => {
     proofs.value.push({ id: `PRF-${String(proofs.value.length + 1).padStart(2, '0')}`, round: proofs.value.length + 1, date: new Date().toISOString().slice(0, 10), sample: `数字样张 v${proofs.value.length + 1}`, deltaE: 0, feedback: '', correction: '', owner: '当前用户', decision: '待决定' })
   }
 
-  function lockBaseline() {
-    locked.value = true
-    revision.value = `R${Number(revision.value.slice(1)) + 1}`
+  function currentHashes(): Record<string, string> {
+    return scopeHashes({ pages: pages.value, positions: positions.value, proofs: proofs.value, spec: sheetSpec })
+  }
+
+  function latestPassedProof(): Proof | undefined {
+    return proofs.value.filter((proof) => proof.decision === '通过').sort((a, b) => b.round - a.round)[0]
+  }
+
+  /** 基线锁定：乐观并发提交，先确认的基线生效，后到内容只作冲突留档 */
+  function confirmBaseline(): { ok: boolean; reason?: string } {
+    const tip = ledger.confirmed[ledger.confirmed.length - 1]
+    const unlock = latestPassedProof()
+    if (!tip) return { ok: false, reason: '无已确认基线，无法提交' }
+    if (!unlock || unlock.round <= tip.unlockedBy.round) {
+      return { ok: false, reason: '需要一轮晚于当前基线的通过打样才能解锁新版本' }
+    }
+    const result = submitBaseline({
+      baseRevision: tip.revision,
+      baseHash: tip.baselineHash,
+      payloadHash: hashJson({ pages: pages.value, positions: positions.value, proofs: proofs.value, spec: sheetSpec }),
+      unlockProof: { proofId: unlock.id, round: unlock.round, sample: unlock.sample },
+      payload: { pages: pages.value.length, positions: positions.value.length, proofs: proofs.value.length, submittedBy: TAB_ID },
+    })
+    if (result.ok) {
+      locked.value = true
+      revision.value = result.record.revision
+      lastConflict.value = null
+      recomputeAllTasks(tasks.value, currentHashes(), result.record.revision)
+      return { ok: true }
+    }
+    lastConflict.value = result.conflict
+    return { ok: false, reason: result.conflict.reason }
   }
 
   function unlock() {
     locked.value = false
+    revision.value = `R${Number(revision.value.slice(1)) + 1}`
   }
 
-  function resumeTask(id: string) {
-    const task = tasks.value.find((item) => item.id === id)
-    if (task && task.resumable) {
-      task.status = '生成中'
-      task.progress = Math.max(task.progress, 10)
-      task.updatedAt = '刚刚'
-    }
+  /** 新建导出任务，绑定当前已确认基线，分片按当前版本输入哈希建立 */
+  function addTask() {
+    const tip = ledger.confirmed[ledger.confirmed.length - 1]
+    const task = createTask('package', '印刷交付包 · PDF/X-4', tip?.revision ?? revision.value, currentHashes())
+    tasks.value.unshift(task)
+    return task
   }
 
-  return { pages, positions, proofs, tasks, side, zoom, revision, locked, selectedPosition, selectedProof, validations, updatePosition, addPosition, updateProof, createProof, lockBaseline, unlock, resumeTask }
+  /** 恢复中断任务：从最后完成分片继续，写入失败的分片作废后重算 */
+  async function resumeTask(id: string) {
+    const updated = (await exportApi.resume(id)).data
+    const index = tasks.value.findIndex((task) => task.id === id)
+    if (index >= 0) tasks.value[index] = updated
+  }
+
+  return {
+    pages, positions, proofs, tasks, side, zoom, revision, locked, selectedPosition, selectedProof,
+    validations, lastConflict,
+    updatePosition, addPosition, updateProof, createProof,
+    confirmBaseline, unlock, addTask, resumeTask,
+  }
 })

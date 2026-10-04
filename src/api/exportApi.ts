@@ -1,22 +1,40 @@
 import axios, { type AxiosAdapter } from 'axios'
-import type { ExportTask } from '../stores/imposition'
+import { exportTasks, hashJson, type ExportTask } from '../handoff'
 
-let tasks: ExportTask[] = [
-  { id: 'EXP-0925-01', name: '印刷交付包 · PDF/X-4', progress: 72, status: '已中断', updatedAt: '09-25 16:42', resumable: true },
-  { id: 'EXP-0925-02', name: '数字样张低分辨率预览', progress: 100, status: '已完成', updatedAt: '09-25 15:18', resumable: false },
-]
+// 每个任务的写入尝试次数：首次写入在下一分片失败，用于演示“从最后完成分片恢复”
+const attempts = new Map<string, number>()
 
 const adapter: AxiosAdapter = async (config) => {
   await new Promise((resolve) => setTimeout(resolve, 160))
   if (config.url === '/api/print/export-tasks' && config.method === 'get') {
-    return { data: structuredClone(tasks), status: 200, statusText: 'OK', headers: {}, config }
+    return { data: structuredClone(exportTasks.value), status: 200, statusText: 'OK', headers: {}, config }
   }
   if (config.url?.match(/^\/api\/print\/export-tasks\/[^/]+\/resume$/) && config.method === 'post') {
-    const id = config.url.split('/').at(-2)
-    const task = tasks.find((item) => item.id === id)
-    if (task && task.resumable) {
+    const id = config.url.split('/').at(-2) ?? ''
+    const task = exportTasks.value.find((item) => item.id === id)
+    if (task) {
       task.status = '生成中'
-      task.progress = Math.max(task.progress, 12)
+      const shard = task.shards.find((item) => item.status === 'pending' || item.status === 'stale' || item.status === 'failed')
+      if (shard) {
+        const count = (attempts.get(id) ?? 0) + 1
+        attempts.set(id, count)
+        if (count === 1 && shard.status !== 'failed') {
+          // 写入失败：分片作废，任务从最后完成分片处中断
+          shard.status = 'failed'
+          shard.outputHash = undefined
+          task.status = '已中断'
+        } else {
+          // 恢复：跳过已完成分片，从失败分片继续写入并记录输出哈希
+          shard.status = 'done'
+          shard.reused = false
+          shard.outputHash = hashJson(`${shard.id}:${shard.inputHash}:out:v2`)
+          shard.completedAt = '刚刚'
+          const next = task.shards.find((item) => item.status === 'pending' || item.status === 'stale' || item.status === 'failed')
+          task.status = next ? '已中断' : '已完成'
+        }
+      }
+      const done = task.shards.filter((item) => item.status === 'done').length
+      task.progress = Math.round((done / task.shards.length) * 100)
       task.updatedAt = '刚刚'
     }
     return { data: structuredClone(task), status: 200, statusText: 'OK', headers: {}, config }

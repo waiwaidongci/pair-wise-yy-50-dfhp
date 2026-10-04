@@ -4,16 +4,20 @@ import Button from 'primevue/button'
 import ProgressBar from 'primevue/progressbar'
 import Tag from 'primevue/tag'
 import { useImpositionStore } from '../stores/imposition'
+import { ledger, type Shard } from '../handoff'
 
 const store = useImpositionStore()
 const errors = computed(() => store.validations.filter((item) => item.severity === '错误').length)
 const pendingProof = computed(() => store.proofs.find((proof) => proof.decision === '待决定'))
+const activeTasks = computed(() => store.tasks.filter((task) => task.status !== '已完成'))
+const reusedCount = (task: { shards: Shard[] }) => task.shards.filter((shard) => shard.status === 'done' && shard.reused).length
+const invalidCount = (task: { shards: Shard[] }) => task.shards.filter((shard) => shard.status === 'stale' || shard.status === 'failed').length
 </script>
 
 <template>
   <section class="page">
     <div class="page-head">
-      <div><p class="eyebrow">PRINT PRODUCTION / 印刷生产</p><h1>拼版预检与打样总览</h1><p class="muted">在当前拼版版本进入生产前，集中处理页序、出血、色彩与装订风险。</p></div>
+      <div><p class="eyebrow">PRINT PRODUCTION / 印刷生产</p><h1>拼版预检与打样总览</h1><p class="muted">在当前拼版版本进入生产前，集中处理页序、出血、色彩与装订风险，并跟踪版本解锁、分片复用与交接留档。</p></div>
       <div class="actions"><Button label="运行完整预检" icon="pi pi-check-circle" outlined /><Button label="进入拼版工作区" icon="pi pi-th-large" @click="$router.push('/imposition')" /></div>
     </div>
 
@@ -21,7 +25,74 @@ const pendingProof = computed(() => store.proofs.find((proof) => proof.decision 
       <article class="metric"><span>页面文件</span><strong>{{ store.pages.length }}</strong><small>{{ store.positions.length }} 个已排版位</small></article>
       <article class="metric"><span>预检错误</span><strong class="error">{{ errors }}</strong><small>必须处理后方可锁定</small></article>
       <article class="metric"><span>打样轮次</span><strong>{{ store.proofs.length }}</strong><small>当前 ΔE {{ pendingProof?.deltaE ?? '—' }}</small></article>
-      <article class="metric"><span>待恢复导出</span><strong>{{ store.tasks.filter((task) => task.resumable && task.status !== '已完成').length }}</strong><small>断点可继续</small></article>
+      <article class="metric"><span>待恢复导出</span><strong>{{ activeTasks.length }}</strong><small>断点可继续</small></article>
+    </div>
+
+    <div class="handoff-grid">
+      <section class="panel">
+        <div class="panel-head"><h3>版本解锁链</h3><Tag value="打样决定 → 基线" severity="info" /></div>
+        <div class="version-chain">
+          <div v-for="record in ledger.confirmed" :key="record.revision" class="version-row">
+            <div class="version-dot" />
+            <div class="version-body">
+              <strong>{{ record.revision }} 基线<span v-if="record.tabId === 'system'" class="origin">初始基线</span></strong>
+              <small>第 {{ record.unlockedBy.round }} 轮打样解锁 · {{ record.unlockedBy.sample }} · {{ record.unlockedBy.proofId }}</small>
+            </div>
+            <div class="hash" :title="record.baselineHash">{{ record.baselineHash.slice(0, 10) }}</div>
+          </div>
+        </div>
+        <div v-if="ledger.handoffs.length" class="handoff-log">
+          <h4>交接记录</h4>
+          <div v-for="handoff in ledger.handoffs" :key="handoff.id" class="handoff-row">
+            <Tag :value="`${handoff.fromRevision} → ${handoff.toRevision}`" severity="info" />
+            <span>{{ handoff.taskName }}</span>
+            <em>{{ handoff.reused }} 复用 · {{ handoff.invalidated }} 作废</em>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h3>在途分片复用 / 作废</h3><Tag :value="`${activeTasks.length} 个任务`" /></div>
+        <div v-if="!activeTasks.length" class="empty-note">所有导出任务均已封存。</div>
+        <div v-for="task in activeTasks" :key="task.id" class="shard-task">
+          <div class="shard-task-head">
+            <strong>{{ task.name }}</strong>
+            <Tag :value="`发起于 ${task.revision}`" severity="info" />
+          </div>
+          <div class="shard-chips">
+            <span
+              v-for="shard in task.shards"
+              :key="shard.id"
+              :class="['chip', shard.status, { reused: shard.status === 'done' && shard.reused }]"
+              :title="`${shard.label} · 输入 ${shard.inputHash}`"
+            >{{ shard.index + 1 }}</span>
+          </div>
+          <small>{{ task.progress }}% · 复用 {{ reusedCount(task) }} · 作废 {{ invalidCount(task) }}</small>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h3>冲突留档</h3><Tag :value="`${ledger.conflicts.length} 条`" severity="warn" /></div>
+        <div v-if="!ledger.conflicts.length" class="empty-note">两个标签页同时提交时，先确认的基线生效，后到内容只在此留档。</div>
+        <div v-for="conflict in ledger.conflicts" :key="conflict.id" class="conflict-row">
+          <div class="conflict-head">
+            <strong>{{ conflict.tabId }}</strong>
+            <Tag value="未生效" severity="warn" />
+          </div>
+          <small>{{ conflict.at }} · 基于 {{ conflict.baseRevision }} · 载荷哈希 {{ conflict.payloadHash.slice(0, 10) }}</small>
+          <p>{{ conflict.reason }}</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h3>迁移与哈希留档</h3><Tag value="旧结构 → 新结构" /></div>
+        <div v-for="migration in ledger.migrations" :key="migration.id" class="migration-row">
+          <strong>{{ migration.fromShape }} → {{ migration.toShape }}</strong>
+          <small>{{ migration.at }}</small>
+          <div class="hash-row"><span title="旧数据哈希">旧 {{ migration.fromHash.slice(0, 10) }}</span><i class="pi pi-arrow-right" /><span title="迁移后哈希">新 {{ migration.toHash.slice(0, 10) }}</span></div>
+          <p>{{ migration.summary }}</p>
+        </div>
+      </section>
     </div>
 
     <div class="overview-grid">
@@ -60,7 +131,7 @@ const pendingProof = computed(() => store.proofs.find((proof) => proof.decision 
           <div v-for="task in store.tasks" :key="task.id">
             <div><span>{{ task.name }}</span><strong>{{ task.progress }}%</strong></div>
             <ProgressBar :value="task.progress" :showValue="false" :style="{ height: '7px' }" />
-            <small>{{ task.status }} · {{ task.updatedAt }}</small>
+            <small>{{ task.status }} · {{ task.revision }} · {{ task.updatedAt }}</small>
           </div>
         </section>
       </aside>
@@ -71,6 +142,40 @@ const pendingProof = computed(() => store.proofs.find((proof) => proof.decision 
 <style scoped>
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .metric .error { color: #b84e35; }
+.handoff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.version-chain { padding: 10px 16px; }
+.version-row { display: grid; grid-template-columns: 16px 1fr auto; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid #edf1f1; }
+.version-dot { width: 10px; height: 10px; border: 2px solid #337b79; border-radius: 50%; background: white; }
+.version-row strong, .version-row small { display: block; }
+.version-row small { margin-top: 3px; color: #7a878d; font-size: 10px; }
+.origin { margin-left: 6px; padding: 1px 6px; border-radius: 4px; color: #5a6b70; background: #eef2f2; font-size: 9px; font-weight: 500; }
+.hash { color: #506f75; font-family: monospace; font-size: 10px; }
+.handoff-log { padding: 10px 16px 14px; }
+.handoff-log h4 { margin: 4px 0 8px; color: #6f7d83; font-size: 11px; }
+.handoff-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px dashed #e4eaea; font-size: 11px; }
+.handoff-row span { flex: 1; color: #5a6b70; }
+.handoff-row em { color: #b07a1f; font-style: normal; font-size: 10px; }
+.shard-task { padding: 12px 16px; border-bottom: 1px solid #edf1f1; }
+.shard-task-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.shard-task-head strong { font-size: 12px; }
+.shard-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+.chip { display: inline-grid; width: 24px; height: 24px; place-items: center; border: 1px solid #d3dcde; border-radius: 6px; color: #8a999d; background: #f4f6f6; font-size: 10px; font-weight: 700; }
+.chip.done { color: #2d735b; border-color: #bfe2d4; background: #e9f5ef; }
+.chip.done.reused { color: #2a6f97; border-color: #b9dcef; background: #eaf4fb; }
+.chip.stale { color: #b07a1f; border-color: #ecd9ae; background: #fdf6e7; }
+.chip.failed { color: #b84e35; border-color: #f0c4ba; background: #fdeeea; }
+.shard-task small { color: #7a878d; font-size: 10px; }
+.empty-note { padding: 18px 16px; color: #8a999d; font-size: 11px; line-height: 1.6; }
+.conflict-row { padding: 10px 16px; border-bottom: 1px solid #edf1f1; }
+.conflict-head { display: flex; align-items: center; justify-content: space-between; }
+.conflict-row strong { font-size: 12px; }
+.conflict-row small { display: block; margin-top: 3px; color: #7a878d; font-size: 10px; }
+.conflict-row p { margin: 6px 0 0; color: #8a6a5a; font-size: 10px; line-height: 1.5; }
+.migration-row { padding: 10px 16px; border-bottom: 1px solid #edf1f1; }
+.migration-row strong { font-size: 11px; }
+.migration-row small { display: block; margin-top: 3px; color: #7a878d; font-size: 10px; }
+.hash-row { display: flex; align-items: center; gap: 6px; margin-top: 5px; color: #506f75; font-family: monospace; font-size: 10px; }
+.migration-row p { margin: 5px 0 0; color: #7a878d; font-size: 10px; line-height: 1.5; }
 .overview-grid { display: grid; grid-template-columns: minmax(0,1fr) 350px; gap: 14px; align-items: start; }
 .project-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px; }
 .project-card strong { font-size: 17px; }
@@ -91,4 +196,5 @@ aside { display: grid; gap: 14px; }
 .export-mini > div > div { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px; }
 .export-mini small { display: block; margin-top: 5px; color: #7d898e; }
 @media (max-width: 1050px) { .overview-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1200px) { .handoff-grid { grid-template-columns: 1fr; } }
 </style>

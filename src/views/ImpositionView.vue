@@ -9,6 +9,7 @@ import ImpositionCanvas from '../components/ImpositionCanvas.vue'
 import { useImpositionStore } from '../stores/imposition'
 
 const store = useImpositionStore()
+const lockMessage = ref<{ severity: 'success' | 'warn'; text: string } | null>(null)
 const sideOptions = [
   { label: '正面', value: 'front' },
   { label: '反面', value: 'back' },
@@ -28,6 +29,12 @@ function locate(pageNo?: number) {
     store.side = position.front ? 'front' : 'back'
   }
 }
+
+function lockBaseline() {
+  const result = store.confirmBaseline()
+  if (result.ok) lockMessage.value = { severity: 'success', text: `基线 ${store.revision} 已确认：由通过轮次打样解锁，在途任务分片已按新版本重算。` }
+  else lockMessage.value = { severity: 'warn', text: result.reason ?? '提交未生效' }
+}
 </script>
 
 <template>
@@ -40,13 +47,14 @@ function locate(pageNo?: number) {
     <Message v-if="store.validations.length" severity="warn" :closable="false" class="mb-3">
       当前版本有 {{ store.validations.filter((item) => item.severity === '错误').length }} 个阻断错误和 {{ store.validations.filter((item) => item.severity === '警告').length }} 个警告。
     </Message>
+    <Message v-if="lockMessage" :severity="lockMessage.severity" :closable="false" class="mb-3">{{ lockMessage.text }}</Message>
 
     <div class="toolbar panel">
       <SelectButton v-model="store.side" :options="sideOptions" optionLabel="label" optionValue="value" />
       <span class="muted">缩放 {{ store.zoom }}%</span>
       <Slider v-model="store.zoom" :min="35" :max="100" :step="5" style="width:150px" />
       <span class="paper-spec">720 × 1020mm · 出血 3mm · 安全区 5mm · {{ store.locked ? '基线只读' : '编辑中' }}</span>
-      <Button v-if="!store.locked" label="审批锁定" icon="pi pi-lock" size="small" @click="store.lockBaseline" />
+      <Button v-if="!store.locked" label="审批锁定" icon="pi pi-lock" size="small" @click="lockBaseline" />
       <Button v-else label="解锁修订" icon="pi pi-lock-open" size="small" severity="warn" outlined @click="store.unlock" />
     </div>
 
