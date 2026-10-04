@@ -1,0 +1,28 @@
+:root {
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: #26373d;
+  background: #eff2f2;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { min-height: 100%; margin: 0; }
+body { min-width: 320px; }
+.page { padding: 22px; }
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.page-head h1 { margin: 3px 0 4px; font-size: clamp(22px, 3vw, 30px); }
+.eyebrow { margin: 0; color: #6f7d83; font-size: 11px; font-weight: 800; letter-spacing: .13em; }
+.muted { color: #74828a; }
+.panel { border: 1px solid #dce3e4; border-radius: 10px; background: white; box-shadow: 0 8px 24px rgba(34,57,64,.05); }
+.panel-head { display: flex; min-height: 52px; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #e7ebec; }
+.panel-head h3 { margin: 0; font-size: 15px; }
+.metric-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; margin-bottom: 14px; }
+.metric { padding: 16px; border: 1px solid #dce3e4; border-radius: 10px; background: white; }
+.metric span, .metric small { display: block; color: #74828a; font-size: 12px; }
+.metric strong { display: block; margin: 7px 0; color: #233e47; font-size: 28px; }
+
+@media (max-width: 760px) {
+  .page { padding: 12px; }
+  .page-head { align-items: flex-start; flex-direction: column; }
+  .metric-grid { grid-template-columns: 1fr 1fr; }
+}
